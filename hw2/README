@@ -1,0 +1,10 @@
+Things tried.
+
+1. Tried simple precision and recall and harmonic mean. Score went upto 0.149
+2. Added word2vec features,for representing words in lines. Used two strategies for comparing similarity: 1. considered line as composition of string 2. Did a "alignment" by considering max-similarity match and then averaged scores. Did not result in any improvement. This was followed by training on data obtained from WMT to create word2vec. Did not help.
+3. Came to realise the crux lies in the stemming/lemmatisation of Czech. After trying to find ready made stemmers online: Wrote my own "hacky stemmer". Alternatively since Russian is a slavic language, used that stemmer. (Results from hacky stemmer and Russian Stemmer were close)
+4. Tried to improve scores by learning a language model. Strategies I tried there were finding the perplexity of hypothesis sentence, its difference with the perplexity of source sentence etc. These gave really bad results.
+5. In trying to simplify precision recall, went on trying to add recall/precision of higher order n-grams. I noticed a increase in performance when I dropped lower order recall. In the extreme case, using only recall over 5-grams gave best score. However inorder to accomodate for slightly shorter sentences: I tried with a GM of 4-gram and 5-gram recall. This did not deteriorate performance a lot.
+
+
+
