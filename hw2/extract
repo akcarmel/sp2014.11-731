@@ -3,13 +3,182 @@
 import argparse
 import json
 import os, sys, math
+import codecs
+import numpy
+from operator import add
+import string
+import nltk
+from nltk.stem.snowball import RussianStemmer
+import math
+exclude = set(string.punctuation)
+table = string.maketrans("","")
+## https://stackoverflow.com/questions/11692199/string-translate-with-unicode-data-in-python
+remove_punctuation_map = dict((ord(char), None) for char in string.punctuation)
+
+word_vector_dictionary={} 
+## READING THE WORD2VEC vector list constructed from word2vec
+def harmonic_mean(harmonic_list):
+    total_sum=0.0
+    for number in harmonic_list:
+        if number==0.0:
+           number=1.0
+        total_sum+=float(1.0)/float(number)
+    return float(len(harmonic_list))/float(total_sum)
+
+def dot_product(vec1,vec2):
+    assert len(vec1) == len(vec2)
+    total=0.0
+    for i in range(len(vec1)):
+        total+=float(vec1[i])*float(vec2[i])
+    return total
+
+def make_ngrams(words,n):
+    l=len(words)
+    ngrams=[]
+    for i in range(l-1):
+        ngram_list=words[i:i+n-1]
+        ngram_tuple=tuple(ngram_list)
+        ngrams.append(ngram_tuple)
+    return ngrams
+
+def cosine_similarity(vec1,vec2):
+    d_vec1=dot_product(vec1,vec1)
+    d_vec2=dot_product(vec2,vec2)
+    num=dot_product(vec1,vec2)
+    den=math.sqrt(d_vec1*d_vec2)
+    if float(den)==0.0:
+       return 0.0
+    else:
+       return float(num)/float(den)
+
+def similarity_score_composition_wise(hwords,rwords):
+    total_hwords=[]
+    total_rwords=[]
+    flagh=False
+    flagr=False
+    
+    for word in hwords:
+        if word.encode('utf-8') not in word_vector_dictionary:  #Not sure why republikan is not showing up:encoding issue?
+            continue
+        if not flagh:
+           total_hwords=[0.0 for dim in word_vector_dictionary[word.encode('utf8')]]
+           flagh=True
+        total_hwords=map(add,word_vector_dictionary[word.encode('utf8')],total_hwords)
+    for word in rwords:
+        if word.encode('utf-8') not in word_vector_dictionary:
+            continue
+        if not flagr:
+           total_rwords=[0.0 for dim in word_vector_dictionary[word.encode('utf8')]]
+           flagr=True
+        total_rwords=map(add,word_vector_dictionary[word.encode('utf8')],total_rwords)
+    if len(total_hwords) != len(total_rwords):
+       return 0.0
+    if len(total_hwords) ==0 or  len(total_rwords) == 0:
+       return 0.0
+    #return cosine_similarity(total_hwords,total_rwords)/len(total_hwords)  #Normalising
+    avg=(len(total_hwords)+len(total_rwords))/2.0
+    #return cosine_similarity(total_hwords,total_rwords)/avg
+    return cosine_similarity(total_hwords,total_rwords)
+
+def similarity_score_max_match(hwords,rwords):
+    total_max_score=0.0
+    for word1 in hwords:
+        if word1.encode('utf-8') not in word_vector_dictionary:  #Not sure why republikan is not showing up:encoding issue?
+            continue
+        max_score=-1.0
+        max_rword=''
+        for word2 in rwords:
+            if word2.encode('utf-8') not in word_vector_dictionary:  #Not sure why republikan is not showing up:encoding issue?
+               continue
+            score=cosine_similarity(word_vector_dictionary[word1.encode('utf8')],word_vector_dictionary[word2.encode('utf8')])
+            if score > max_score:
+               max_score=score
+               max_rword=word2
+        if max_rword not in rwords:
+            continue
+        rwords.remove(max_rword)
+        total_max_score+=max_score
+    if len(hwords) == 0 or len(rwords) == 0:
+        return 0.0
+    avg=len(rwords)+len(hwords)/2.0
+    return float(total_max_score)/avg
+
+def harmonic_score(hwords,rwords):
+  hwords6=[word[:6] for word in hwords if len(word) > 5]
+  rwords6=[word[:6] for word in rwords if len(word) > 5]
+  harmonic_list=[]
+  refset6=set(rwords6)
+  if len(hwords6) ==0 or len(rwords6) == 0:
+      if len(hwords6) == 0:
+         precision6=1.0
+      if len(rwords6) == 0:
+         recall6=1.0
+      if len(rwords6)!=0:
+         recall6 = sum(1.0 for word in hwords6 if word in refset6) / len(rwords6)
+      if len(hwords6)!=0:
+         precision6 = sum(1.0 for word in hwords6 if word in refset6) / len(hwords6)
+  else:
+       precision6 = sum(1.0 for word in hwords6 if word in refset6) / len(hwords6)
+       recall6 = sum(1.0 for word in hwords6 if word in refset6) / len(rwords6)
+  harmonic_list.append(precision6)
+  harmonic_list.append(recall6)
+  return harmonic_list
+def find_precision_recall(hbigrams,rbigrams):
+  refbigramset=set(rbigrams)
+  if len(hbigrams)==0:
+      bi_precision=1.0
+  else:
+      bi_precision = sum(1.0 for bigram in hbigrams if bigram in refbigramset) / len(hbigrams)
+  if len(rbigrams)==0:
+      bi_recall=1.0
+  else:
+      bi_recall= sum(1.0 for bigram in hbigrams if bigram in refbigramset) / len(rbigrams)
+  return bi_precision,bi_recall
+
+def make_sent_bleu(p1,p2,p3,p4):
+    precision=1.0
+    power=0
+    if float(p1)!=0.0:
+       power+=1.0
+       precision=precision*float(p1)
+    if p2!=0.0:
+       power+=1.0
+       precision=precision*float(p2)
+    if float(p3)!=0.0:
+       power+=1.0
+       precision=precision*float(p3)
+    if p4!=0.0:
+       power+=1.0
+       precision=precision*float(p4)
+    if power==0:
+       power+=1.0
+    return math.pow(precision,float(1.0/power))
 
 def extract_features(hyp, ref):
-  hwords = hyp.lower().split()
-  rwords = ref.lower().split()
+  ru=RussianStemmer()
+  uhwords = hyp.lower().split()
+  urwords = ref.lower().split()
+  shwords=[word.translate(remove_punctuation_map) for word in uhwords]
+  srwords=[word.translate(remove_punctuation_map) for word in urwords]
+  hwords=[ru.stem(word) for word in shwords]
+  rwords=[ru.stem(word) for word in srwords]
   refset = set(rwords)
-  precision = sum(1.0 for word in hwords if word in refset) / len(hwords)
-  return {'prec':precision}
+  nhwords=[word.encode('utf8') for word in hwords]
+  nrwords=[word.encode('utf8') for word in rwords]
+  htgrams=make_ngrams(nhwords,3)
+  rtgrams=make_ngrams(nrwords,3)
+  hbigrams=make_ngrams(nhwords,2)
+  rbigrams=make_ngrams(nrwords,2)
+  h4grams=make_ngrams(nhwords,4)
+  r4grams=make_ngrams(nrwords,4)
+  h5grams=make_ngrams(nhwords,5)
+  r5grams=make_ngrams(nrwords,5)
+  p1,r1=find_precision_recall(hwords,rwords)
+  p4,r4=find_precision_recall(h4grams,r4grams)
+  p5,r5=find_precision_recall(h5grams,r5grams)
+  p3,r3=find_precision_recall(htgrams,rtgrams)
+  p2,r2=find_precision_recall(hbigrams,rbigrams)
+  return {'b1':math.sqrt(r4*r5)}  #0.150 bigrams
 
 argparser = argparse.ArgumentParser(prog='extract')
 argparser.add_argument('-x', '--pairs', dest='pairs', default='data/en-cs.pairs', help='Reference-Hypothesis pairs')
@@ -19,9 +188,11 @@ args = argparser.parse_args()
 lc = 0
 sys.stderr.write('Extracting features for (ref,hyp) pairs from %s.\n' % args.pairs)
 # loop over all (ref,hyp) pairs in the input file and extract evaluation features
-for ref_hyp in open(args.pairs):
-  lc += 1
-  ref, hyp = ref_hyp.rstrip().split(' ||| ')
-  fmap = extract_features(hyp, ref)
-  print json.dumps(fmap)   # print evaluation feature map
+#for ref_hyp in open(args.pairs):
+with codecs.open(args.pairs,'r','utf-8') as g:
+  for ref_hyp in g:
+    lc += 1
+    ref, hyp = ref_hyp.rstrip().split(' ||| ')
+    fmap = extract_features(hyp, ref)
+    print json.dumps(fmap)   # print evaluation feature map
 
