@@ -6,6 +6,7 @@ import heapq
 from collections import namedtuple
 import itertools
 import math
+import copy
 
 parser = argparse.ArgumentParser(description='Simple phrase based decoder.')
 
@@ -25,7 +26,7 @@ sys.stderr.write('Decoding %s...\n' % (opts.input,))
 input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
 
 #hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, cover, last, fc, tm, end')
-hypothesis = namedtuple('hypothesis', 'logprob, lm_state, cover, predecessor')
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, cover, phrase, predecessor')
 
 def future_cost_estimation(partial_string):
     fc={}
@@ -190,7 +191,6 @@ def hill_climb(perms,f):
     all_tms=get_all_tms(f)
     for perm in perms:
         lmscore=language_model_score(perm)
-        #TODO TM SCORE
         tmscore=translation_score(perm,all_tms)
         scores[perm]=lmscore+tmscore
     return scores
@@ -199,7 +199,9 @@ counter=0
 def find_untranslated(cover,f):
     untrans=[]
     translated=[]
-    untrans=range(len(f))
+    untrans=range(1,len(f)+1)
+    #print "earlier untrans",untrans
+    #print "given cover",cover
     spans=[]
     for trans in cover:
         if len(trans) == 2:
@@ -208,19 +210,23 @@ def find_untranslated(cover,f):
            x=[trans[0]]
         translated.extend(x)
     l=sorted(list(set(untrans)-set(translated)))
-    print "untranslated",l
+    #print "untranslated",l
     start=l[0]
     prev=start
     for i in l:
         if i==start or i==prev+1:
            prev=i
+           if i==l[len(l)-1]:
+              span=(start,prev)
+              spans.append(span)
+              continue
            continue
         else:
             span=(start,prev+1)
             spans.append(span)
             start=i
             prev=i
-    print spans
+    #print "spans", spans
     return spans
 
 
@@ -246,7 +252,111 @@ def future_cost(cover,f,all_fc):
                    
                   
 
+def where_does_it_fit(j,phrase_list,h,f,numofgrams):
+    start=j+1
+    end=j+1+numofgrams
+    span_set=set(range(start,end))
+    end_of_f_sent=len(f)
+    overlap=False
+    new_lm_state=copy.deepcopy(h.lm_state)
+    new_cover=copy.deepcopy(h.cover)
+    lm_state_for_phrase=()
+    last=len(h.cover)-1
+    if start >= 1 and end == h.cover[0][0]:   
+       new_lm_state[0]=tuple(phrase_list)+h.lm_state[0]
+       new_cover[0]=(start,h.cover[0][1])
+       print "case 1"
+       return overlap,new_lm_state,new_cover,lm_state_for_phrase
+       
+    if start == h.cover[last][1] and end <= end_of_f_sent:
+       new_lm_state[last]=h.lm_state[last]+tuple(phrase_list)
+       new_cover[last]=(h.cover[last][0],end)
+       lm_state_for_phrase=h.lm_state[last]
+       print "case 2"
+       return overlap,new_lm_state,new_cover,lm_state_for_phrase
+
+    for k in range(len(h.cover)-1):
+        if len(span_set.intersection(range(h.cover[k][0],h.cover[k][1]))) > 0:
+           overlap=True
+           print "BAD"
+           return overlap,new_lm_state,new_cover,lm_state_for_phrase
+        if start == h.cover[k][1] and end < h.cover[k+1][0]:    #Between two attached to end of first one
+           new_lm_state[k]=h.lm_state[k]+tuple(phrase_list)
+           new_cover[k]=(h.cover[k][0],h.cover[k][1]+end-start)
+           lm_state_for_phrase=h.lm_state[k]
+           print "case 3"
+           return overlap,new_lm_state,new_cover,lm_state_for_phrase
+
+        if start == h.cover[k][1] and end == h.cover[k+1][0]:   #attached to end of first beginning of second
+           new_lm_state[k]=h.lm_state[k]+tuple(phrase_list)+h.lm_state[k+1]
+           new_cover[k]=(h.cover[k][0],h.cover[k+1][1])
+           lm_state_for_phrase=h.lm_state[k]
+           del new_cover[k+1]
+           del new_lm_state[k+1]
+           print "case 4"
+           return overlap,new_lm_state,new_cover,lm_state_for_phrase
+
+        if start > h.cover[k][1] and  end == h.cover[k+1][0]:
+           new_lm_state[k]=tuple(phrase_list)+h.lm_state[k+1]
+           new_cover[k]=(h.cover[k+1][0]-end+start,h.cover[k+1][0])
+           print "case 5"
+           return overlap,new_lm_state,new_cover,lm_state_for_phrase
+
+
+def where2_does_it_fit(j,h,f,numofgrams):
+    start=j+1
+    end=j+1+numofgrams
+    span_set=set(range(start,end))
+    end_of_f_sent=len(f)
+    overlap=False
+    new_cover=copy.deepcopy(h.cover)
+    last=len(h.cover)-1
+    span_set=set(range(start,end))
+    if start >= 1 and end == h.cover[0][0]:   
+       new_cover[0]=(start,h.cover[0][1])
+       return overlap,new_cover
+    if start >= 1 and end < h.cover[0][0]:   
+       new_cover[0]=(start,end)
+       return overlap,new_cover
+       
+    if start == h.cover[last][1]:# and end <= end_of_f_sent:
+       new_cover[last]=(h.cover[last][0],end)
+       return overlap,new_cover
+
+    if start > h.cover[last][1]:# and end <= end_of_f_sent:
+       new_cover[last]=(start,end)
+       return overlap,new_cover
+
+    if len(h.cover) > 1:
+       if len(span_set.intersection(range(h.cover[0][0],h.cover[0][1]))) > int(0):
+          overlap=True
+          return overlap,new_cover
+    for k in range(len(h.cover)):
+        
+        if len(span_set.intersection(range(h.cover[k][0],h.cover[k][1]))) > int(0):
+           overlap=True
+           return overlap,new_cover
+        if start == h.cover[k][1] and end < h.cover[k+1][0]:    #Between two attached to end of first one
+           new_cover[k]=(h.cover[k][0],h.cover[k][1]+end-start)
+           return overlap,new_cover
+
+        if start == h.cover[k][1] and end == h.cover[k+1][0]:   #attached to end of first beginning of second
+           new_cover[k]=(h.cover[k][0],h.cover[k+1][1])
+           del new_cover[k+1]
+           return overlap,new_cover
+
+        if start > h.cover[k][1] and  end == h.cover[k+1][0]:
+           new_cover[k]=(h.cover[k+1][0]-end+start,h.cover[k+1][0])
+           return overlap,new_cover
+        if start > h.cover[k][1] and  end < h.cover[k+1][0]:
+           new_cover[k]=(start,end)
+           return overlap,new_cover
+
+        
+            
+
 for f in input_sents:
+
     # The following code implements a DP monotone decoding
     # algorithm (one that doesn't permute the target phrases).
     # Hence all hypotheses in stacks[i] represent translations of 
@@ -254,118 +364,68 @@ for f in input_sents:
     # HINT: Generalize this so that stacks[i] contains translations
     # of any i words (remember to keep track of which words those
     # are, and to estimate future costs)
-    initial_hypothesis = hypothesis(0.0, (), None, None)
+    
+    #initial_hypothesis = hypothesis(0.0, [lm.begin()],[(0,1)], None)
+    initial_hypothesis = hypothesis(0.0, lm.begin(),[(0,1)], None, None)
     counter+=1
     sys.stderr.write("current sentence %d\n" % (counter,))
     stacks = [{} for _ in f] + [{}]
     stacks[0][lm.begin()] = initial_hypothesis  #Ordered from 1 onwards
     all_fc=all_future_cost_estimation(f)
-    #for i, stack in enumerate(stacks[:-1]):
-    for i in xrange(1,len(f)+1):
+    #print "sentence"
+    #print f
+    #print 
+    for i in xrange(1,len(f)+1):  #I moves on a 1-indexed sequence, i=0 is kept for begin
         # extend the top s hypotheses in the current stack
-        if i == 1:
-           for j in range(len(f)):
-               if (f[j],) in tm:
-                  for phrase in tm[(f[j],)]:
-                      logprob=phrase.logprob
-                      fc=0.0
-                      if j > 0:
-                         fc+=all_fc[(0,j)]
-                      if j!=len(f)-1:
-                         fc+=all_fc[(j,len(f)-1)]
-                      
-                      logprob+=fc
-                      if j==1:
-                         lm_state=lm.begin()
-                      else:
-                          lm_state=()
-                      for word in phrase.english.split():
-                          (lm_state, word_logprob) = lm.score(lm_state, word)
-                          logprob += word_logprob
-                      spans=[(j,)]
-                      new_hypothesis=hypothesis(logprob,[lm_state],spans,initial_hypothesis)
-                  if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob:
-                     stacks[1][lm_state]=new_hypothesis
-        if i==2: 
-           stack=stacks[1]
+       for numofgrams in range(1,4):
+           if i - numofgrams < 0:
+              break
+           stack=stacks[i-numofgrams]
            for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob):
-               print "old hypothesis\n",h
-               for j in range(len(f)):
-                  already_done=False
-                  for span in h.cover:
-                      print "span",span
-                      if len(span)==2:
-                         if span[0] <= j and j < span[1]:
-                            already_done=True
-                            break
-                      else:
-                          if span[0] == j:
-                             alread_done=True
-                  if already_done:
-                      continue
-                  if (f[j],) in tm:
-                     for phrase in tm[(f[j],)]:
-                         logprob=phrase.logprob+h.logprob
-                         t=sorted(list(h.cover)+[(j,)])
-                         print t,f
-                         fc=future_cost(t,f,all_fc)
-                         logprob+=fc
-                         print "hcover",h.cover
-                         print "hlmstatE", h.lm_state
-                         assert len(h.cover)==len(h.lm_state)-1
-                         lm_state=lm.begin()
-                         for i in range(len(h.cover)):
-                            if h.cover[i][len(h.cover[i])-1]==j:
-                               lm_state=h.lm_state[i+1]
-                               print "break",lm_state
-                               break
-                         print "before loop",lm_state
-                         for word in phrase.english.split():
-                             (lm_state, word_logprob) = lm.score(tuple(lm_state), word)
-                             logprob += word_logprob
-                         new_lm_state=sorted([lm_state]+list(h.lm_state))
-                         print "new lm state",new_lm_state
-                         new_hypothesis=hypothesis(logprob,new_lm_state,spans,h)
-                         print "new hypothesis",new_hypothesis
-                     if tuple(lm_state) not in stacks[j] or stacks[j][tuple(lm_state)].logprob < logprob:
-                          stacks[1][lm_state]=new_hypothesis
-        '''
-        for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob): # prune
-            cov=h.cover
-            uncovered_spans=find_untranslated(h.cover,f)
-            for span in all_spans:
-                if f[span[0]:span[1]] in tm:
-                    for phrase in tm[span]:
-                        logprob = h.logprob + phrase.logprob
-                        if h.end == span.begin -1:
-                           lm_state = h.lm_state
-                        else:
-                            lm_state=lm.begin()
-                        for word in phrase.english.split():
-                            (lm_state, word_logprob) = lm.score(lm_state, word)
-                            logprob += word_logprob
-                        logprob += lm.end(lm_state) if j == len(f) else 0.0
-                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
-                        if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
-                            stacks[j][lm_state] = new_hypothesis 
+               for j in range(len(f)-numofgrams):  #J moves on a 0-indexed sequence
+                   foriegn_phrase=tuple([f[k] for k in range(j,j+numofgrams)])
+                   #print "foriegn phrase",foriegn_phrase, k
+                   if foriegn_phrase in tm:
+                      #print "foriegn phrase",foriegn_phrase
+                      for phrase in tm[foriegn_phrase]:
+                          #print "english phrase",phrase.english
+                          #overlap,new_lm_state,new_cover,lm_state_for_phrase=where_does_it_fit(j,phrase_list,h,f,numofgrams)
+                          overlap,new_cover=where2_does_it_fit(j,h,f,numofgrams)
+                          if overlap:
+                             continue
+                          #print "lmstate for phrase,j,f[j],phrase,newcover",lm_state_for_phrase,j,f[j],phrase,new_cover
+                          logprob=phrase.logprob+h.logprob
+                          lm_state_for_phrase=h.lm_state
+                          for word in phrase.english.split():
+                              (lm_state_for_phrase, word_logprob) = lm.score(lm_state_for_phrase, word)
+                              logprob += word_logprob
+                          fc=future_cost(new_cover,f,all_fc)
+                          logprob+=fc
+                          new_hypothesis=hypothesis(logprob,lm_state_for_phrase,new_cover,phrase,h)
+                          key=lm_state_for_phrase
+                          if key not in stacks[i] or stacks[i][key].logprob < logprob:
+                             stacks[i][key]=new_hypothesis
 
+    #exit()
     # find best translation by looking at the best scoring hypothesis
     # on the last stack
-    winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
+    winner = max(stacks[len(f)].itervalues(), key=lambda h: h.logprob)
+    #print "winner",winner
     #print "winner",winner
     def extract_english_recursive(h):
         return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
     string=extract_english_recursive(winner)
-    allperms=divide_and_make_permutations(string.split(),opts.k)
+    
+    #allperms=divide_and_make_permutations(string.split(),opts.k)
     #print "all perms are",len(allperms)
     #scores=hill_climb(allperms,f)
-    scores=get_all_scores(allperms,f)
-    sys.stderr.write('Number of perms %d\n'% (len(allperms)))
+    #scores=get_all_scores(allperms,f)
+    #sys.stderr.write('Number of perms %d\n'% (len(allperms)))
     #print scores
-    winner=max(scores.iteritems(),key=lambda x: x[1])[0]
+    #winner=max(scores.iteritems(),key=lambda x: x[1])[0]
     #print counter
-    #print string
-    print " ".join(winner)
+    print string
+    #print " ".join(winner)
     #print winner
 
     if opts.verbose:
@@ -374,4 +434,4 @@ for f in input_sents:
         tm_logprob = extract_tm_logprob(winner)
         sys.stderr.write('LM = %f, TM = %f, Total = %f\n' % 
             (winner.logprob - tm_logprob, tm_logprob, winner.logprob))
-        '''
+
