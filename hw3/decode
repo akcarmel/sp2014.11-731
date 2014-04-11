@@ -4,17 +4,11 @@ import sys
 import models
 import heapq
 from collections import namedtuple
-import itertools
-import math
-import copy
-
-parser = argparse.ArgumentParser(description='Simple phrase based decoder.')
 
 parser = argparse.ArgumentParser(description='Simple phrase based decoder.')
 parser.add_argument('-i', '--input', dest='input', default='data/input', help='File containing sentences to translate (default=data/input)')
 parser.add_argument('-t', '--translation-model', dest='tm', default='data/tm', help='File containing translation model (default=data/tm)')
-parser.add_argument('-s', '--stack-size', dest='s', default=20, type=int, help='Maximum stack size (default=1)')
-parser.add_argument('-k', '--divide-permute', dest='k', default=2, type=int, help='dividing permuting sizes')
+parser.add_argument('-s', '--stack-size', dest='s', default=50, type=int, help='Maximum stack size (default=1)')
 parser.add_argument('-n', '--num_sentences', dest='num_sents', default=sys.maxint, type=int, help='Number of sentences to decode (default=no limit)')
 parser.add_argument('-l', '--language-model', dest='lm', default='data/lm', help='File containing ARPA-format language model (default=data/lm)')
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
@@ -25,332 +19,8 @@ lm = models.LM(opts.lm)
 sys.stderr.write('Decoding %s...\n' % (opts.input,))
 input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
 
-#hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, cover, last, fc, tm, end')
-hypothesis = namedtuple('hypothesis', 'logprob, lm_state, cover, phrase, predecessor')
-
-def calculate_lm_score(given_phrase):
-    complete_lm=0.0
-    l=len(given_phrase)
-    if len(given_phrase) <= 3:
-        return three_word_lm(given_phrase,lm.begin())
-    else:
-        for i in range(len(given_phrase)-2): 
-            current_phrase=(given_phrase[i],given_phrase[i+1],given_phrase[i+2])
-            complete_lm+=three_word_lm(current_phrase)
-        current_phrase=(given_phrase[l-2],given_phrase[l-1])
-        complete_lm+=three_word_lm(current_phrase)
-        current_phrase=(given_phrase[l-1],)
-        complete_lm+=three_word_lm(current_phrase)
-    return complete_lm
-            
-
-
-def three_word_lm(given_phrase,lm_state):
-    logprob=0.0
-    for word in given_phrase:
-        (lm_state, word_logprob) = lm.score(lm_state, word)
-        logprob += word_logprob
-    return logprob
-def future_cost_estimation(partial_string):
-    fc={}
-    if partial_string in tm:
-        for given_phrase in tm[partial_string]:
-            logprob=given_phrase.logprob
-            lm_score=calculate_lm_score(partial_string)
-            fc[given_phrase]=logprob+lm_score
-    return fc
-def all_future_cost_estimation(f):
-    l=len(f)
-    all_fc={}
-    for i in xrange(1,l+1):
-        for j in xrange(i+1,l+2):
-            if j==l+1:
-               fc=future_cost_estimation(f[l-1])
-            else:
-               fc=future_cost_estimation(f[i-1:j-1])
-            min_c=-100000000
-            for p,c in fc.iteritems():
-                #all_fc[(i,j)]=fc
-                #print p,c,i,j
-                if c > min_c:
-                   min_c=c
-            all_fc[(i,j)]=min_c
-    return all_fc
-    
-def logadd(x,y):
-    return x + math.log(1 + math.exp(y-x)) if y < x else y + math.log(1 + math.exp(x-y))
-def coverage(sequence):
-    return reduce(lambda x,y: x|y, map(lambda i: long(1) << i, sequence), 0)
-def make_permutations(partial_string_orig):
-    partial_strings=list(itertools.permutations(list(partial_string_orig)))
-    return partial_strings
-
-def merge_two_permutations(p1,p2):
-    two_merge=[]
-    for j,t1 in enumerate(p1):
-        for k,t2 in enumerate(p2):
-            l1=list(t1)
-            l2=list(t2)
-            l1.extend(l2)
-            two_merge.append(tuple(l1)) 
-    return two_merge
-
-def merge_permutations(p):
-    pkeys=sorted(p.keys()) 
-    last_key=pkeys[len(pkeys)-1]
-    first_key=pkeys[0]
-    two_merge=p[first_key]
-    for i in range(first_key+1,last_key+1):
-        two_merge=merge_two_permutations(two_merge,p[i])
-    #print len(two_merge)
-    return two_merge
-
-            
-
-def divide_and_make_permutations(partial_string_orig,k):
-    length_of_string=len(partial_string_orig)
-    if length_of_string <= k:
-        return make_permutations(partial_string_orig)
-    quotient=length_of_string/k
-    remained=length_of_string%k
-    quo_wise_permutations={}
-    #print quotient,remained
-    for i in range(quotient):
-        quo_wise_permutations[i]=make_permutations(partial_string_orig[i*k:(i+1)*k])
-
-    quo_wise_permutations[quotient]=make_permutations(partial_string_orig[quotient*k:])
-    #print "quo wise",quo_wise_permutations
-    all_permutations=merge_permutations(quo_wise_permutations)
-    return all_permutations
-
-def language_model_score(sent):
-    l=len(sent)
-    logprob=0.0
-    for i in range(l-2):
-        lm_state = lm.begin()
-        for word in phrase.english.split():
-            (lm_state, word_logprob) = lm.score(lm_state, word)
-            logprob += word_logprob
-    return logprob
-
-def translation_score(perm,all_tms):
-    l=len(perm)
-    tms=0.0
-
-    for i in range(0,l,3):
-        tphrase=perm[i:i+3]
-        if tphrase in all_tms:
-            tms+=all_tms[tphrase]
-        elif tphrase[:2] in all_tms and tphrase[2] in all_tms:
-            tms+=all_tms[tphrase[:2]]
-            tms+=all_tms[tphrase[2]]
-        elif tphrase[1:] in all_tms and tphrase[0] in all_tms:
-            tms+=all_tms[tphrase[1:]]
-            tms+=all_tms[tphrase[0]]
-        else:
-            return -10000000.0
-    return tms
-        
-
-
-def get_all_scores(perms,input_sent):
-    all_perms=[(input_sent,e) for e in perms]
-    all_scores={}
-    for pair in all_perms:
-        total_logprob = 0.0
-        f=pair[0]
-        e=pair[1]
-        # compute p(e) under the LM
-        lm_state = lm.begin()
-        lm_logprob = 0.0
-        for word in e + ("</s>",):
-            (lm_state, word_logprob) = lm.score(lm_state, word)
-            lm_logprob += word_logprob
-        total_logprob += lm_logprob
-        # alignments[i] is a list of all the phrases in f that could have
-        # generated phrases starting at position i in e
-        alignments = [[] for _ in e]
-        for fi in xrange(len(f)):
-            for fj in xrange(fi+1,len(f)+1):
-                if f[fi:fj] in tm:
-                    for phrase in tm[f[fi:fj]]:
-                        ephrase = tuple(phrase.english.split())
-                        for ei in xrange(len(e)+1-len(ephrase)):
-                            ej = ei+len(ephrase)
-                            if ephrase == e[ei:ej]:
-                                alignments[ei].append((ej, phrase.logprob, fi, fj))
-
-        chart = [{} for _ in e] + [{}]
-        chart[0][0] = 0.0
-        for ei, sums in enumerate(chart[:-1]):
-            for v in sums:
-                for ej, logprob, fi, fj in alignments[ei]:
-                    if coverage(range(fi,fj)) & v == 0:
-                        new_v = coverage(range(fi,fj)) | v
-                        if new_v in chart[ej]:
-                            chart[ej][new_v] = logadd(chart[ej][new_v], sums[v]+logprob)
-                        else:
-                            chart[ej][new_v] = sums[v]+logprob
-        goal = coverage(range(len(f)))
-        if goal in chart[len(e)]:
-           total_logprob += chart[len(e)][goal]
-           all_scores[e]=total_logprob
-        else:
-            all_scores[e]=-10000000.0
-    return all_scores
-
-
-        
-def get_all_tms(f):
-    all_tms={}
-    for i in range(len(f)):
-        for j in range(len(f)):
-            if f[i:j] in tm:
-                for phrase in tm[f[i:j]]:
-                    all_tms[phrase.english]=phrase.logprob
-    return all_tms
-
-def hill_climb(perms,f):
-    scores={}
-    all_tms=get_all_tms(f)
-    for perm in perms:
-        lmscore=language_model_score(perm)
-        tmscore=translation_score(perm,all_tms)
-        scores[perm]=lmscore+tmscore
-    return scores
-
-
-counter=0
-def find_translated_list(cover,f):
-    untrans=[]
-    translated=[]
-    untrans=range(1,len(f)+1)
-    spans=[]
-    for trans in cover:
-        if len(trans) == 2:
-           x=range(trans[0],trans[1])
-        else:
-           x=[trans[0]]
-        translated.extend(x)
-
-    return sorted(translated)
-
-def find_untranslated(cover,f):
-    untrans=[]
-    untrans=range(1,len(f)+1)
-    spans=[]
-    translated=find_translated_list(cover,f)
-    l=sorted(list(set(untrans)-set(translated)))
-    if len(l)>1:
-       return list_fuse(l)
-    else:
-       return spans
-
-
-
-def generate_all_spans(uncovered_spans):
-    all_spans=[]
-    for span in uncovered_spans:
-        j=span[1]
-        i=0
-        while j!=span[0]:
-            j=span[1]-i
-            all_spans.append(span[0],j)
-            i+=1
-    return all_spans
-
-def future_cost(cover,f,all_fc):
-    #print cover,f
-    spans=find_untranslated(cover,f)
-    fc=0.0
-    for span in spans:
-        fc+=all_fc[span]
-    return fc    
-
-
-def fuse(covers):
-    if len(covers) == 1:
-       return covers
-    l=[]
-    for k in range(len(covers)):
-        l.extend(xrange(covers[k][0],covers[k][1]))
-    return list_fuse(l)
-
-def list_fuse(l):
-    start=l[0]
-    prev=start
-    spans=[]
-    for i in range(1,len(l)):
-        if l[i] == prev+1:
-           prev=l[i]
-        else:
-            span=(start,prev+1)
-            spans.append(span)
-            start=l[i]
-            prev=start
-    span=(start,prev+1)
-    spans.append(span)
-    return sorted(spans)
-            
-def where2_does_it_fit(j,h,f,numofgrams):
-    start=j+1
-    end=j+1+numofgrams
-    span_set=set(range(start,end))
-    end_of_f_sent=len(f)
-    overlap=False
-    new_cover=copy.deepcopy(h.cover)
-    #print "going in ",new_cover,start,end
-    last=len(h.cover)-1
-    span_set=set(range(start,end))
-    if start >= 1 and end == h.cover[0][0]:   
-       new_cover[0]=(start,h.cover[0][1])
-       return overlap,fuse(new_cover)
-    if start >= 1 and end < h.cover[0][0]:   
-       new_cover.insert(0,(start,end))
-       return overlap,fuse(new_cover)
-       
-    if start == h.cover[last][1]:# and end <= end_of_f_sent:
-       new_cover[last]=(h.cover[last][0],end)
-       return overlap,fuse(new_cover)
-
-    if start > h.cover[last][1]:# and end <= end_of_f_sent:
-       new_cover.insert(last+1,(start,end))
-       return overlap,fuse(new_cover)
-
-    if len(h.cover) > 1:
-       if len(span_set.intersection(range(h.cover[0][0],h.cover[0][1]))) > int(0):
-          overlap=True
-          return overlap,fuse(new_cover)
-    for k in range(len(h.cover)):
-        
-        if len(span_set.intersection(range(h.cover[k][0],h.cover[k][1]))) > int(0):
-           overlap=True
-           return overlap,fuse(new_cover)
-        if start == h.cover[k][1] and end < h.cover[k+1][0]:    #Between two attached to end of first one
-           new_cover[k]=(h.cover[k][0],end)
-           return overlap,fuse(new_cover)
-
-        if start == h.cover[k][1] and end == h.cover[k+1][0]:   #attached to end of first beginning of second
-           new_cover[k]=(h.cover[k][0],h.cover[k+1][1])
-           del new_cover[k+1]
-           return overlap,fuse(new_cover)
-
-        if start > h.cover[k][1] and  end == h.cover[k+1][0]:
-           new_cover[k+1]=(start,h.cover[k+1][1])
-           return overlap,fuse(new_cover)
-        if start > h.cover[k][1] and  end < h.cover[k+1][0]:
-           new_cover.insert(k+1,(start,end))
-           return overlap,fuse(new_cover)
-
-        
-            
-def length_of_cover(cover):
-    translated=[]
-    for k in xrange(len(cover)):
-        translated.extend(range(cover[k][0],cover[k][1]))
-    return len(translated)
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase')
 for f in input_sents:
-
     # The following code implements a DP monotone decoding
     # algorithm (one that doesn't permute the target phrases).
     # Hence all hypotheses in stacks[i] represent translations of 
@@ -358,60 +28,32 @@ for f in input_sents:
     # HINT: Generalize this so that stacks[i] contains translations
     # of any i words (remember to keep track of which words those
     # are, and to estimate future costs)
-    
-    initial_hypothesis = hypothesis(0.0, lm.begin(),[(0,1)], None, None)
-    counter+=1
-    sys.stderr.write("current sentence %d\n " % (counter,))
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None)
+
     stacks = [{} for _ in f] + [{}]
-    stacks[0][lm.begin()] = initial_hypothesis  #Ordered from 1 onwards
-    all_fc=all_future_cost_estimation(f)
-    for i in range(1,len(f)+1):  #I moves on a 1-indexed sequence, i=0 is kept for begin
+    stacks[0][lm.begin()] = initial_hypothesis
+    for i, stack in enumerate(stacks[:-1]):
         # extend the top s hypotheses in the current stack
-       for numofgrams in range(1,4):
-           if i - numofgrams < 0:
-              break
-           stack=stacks[i-numofgrams]
-           for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob):
-               for j in range(len(f)-numofgrams+1):  #J moves on a 0-indexed sequence
-                   foriegn_phrase=tuple([f[k] for k in range(j,j+numofgrams)])
-                   overlap,new_cover=where2_does_it_fit(j,h,f,numofgrams)
-                   if overlap:
-                      continue
-                   if foriegn_phrase in tm:
-                      for phrase in tm[foriegn_phrase]:
-                          logprob=phrase.logprob+h.logprob
-                          lm_state_for_phrase=h.lm_state
-                          for word in phrase.english.split():
-                              (lm_state_for_phrase, word_logprob) = lm.score(lm_state_for_phrase, word)
-                              logprob += word_logprob
-                          ######FUTURE COST#######
-                          fc=future_cost(new_cover,f,all_fc)
-                          logprob+=fc
-                          ########################
-                          new_hypothesis=hypothesis(logprob,lm_state_for_phrase,new_cover,phrase,h)
-                          key=tuple(find_translated_list(new_cover,f))
-                          if key not in stacks[i] or stacks[i][key].logprob < logprob:
-                             assert int(i)+1 ==  length_of_cover(new_hypothesis.cover)
-                             stacks[i][key]=new_hypothesis
+        for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob): # prune
+            for j in xrange(i+1,len(f)+1):
+                if f[i:j] in tm:
+                    for phrase in tm[f[i:j]]:
+                        logprob = h.logprob + phrase.logprob
+                        lm_state = h.lm_state
+                        for word in phrase.english.split():
+                            (lm_state, word_logprob) = lm.score(lm_state, word)
+                            logprob += word_logprob
+                        logprob += lm.end(lm_state) if j == len(f) else 0.0
+                        new_hypothesis = hypothesis(logprob, lm_state, h, phrase)
+                        if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
+                            stacks[j][lm_state] = new_hypothesis 
 
     # find best translation by looking at the best scoring hypothesis
     # on the last stack
-    '''
-    for k in range(len(f)+1):
-        if len(stacks[k]) < 10 and len(stacks[k]) > 1:
-           for key in stacks[k]:
-               print k,stacks[k][key].cover, stacks[k][key].phrase.english
-    '''
-    for k in range(3):
-        if len(stacks[len(f)-k])!=0:
-           winner = max(stacks[len(f)-k].itervalues(), key=lambda h: h.logprob)
-           break
-            
-    #assert len(f)+1 == length_of_cover(winner.cover)
+    winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
     def extract_english_recursive(h):
         return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
-    string=extract_english_recursive(winner)
-    print string
+    print extract_english_recursive(winner)
 
     if opts.verbose:
         def extract_tm_logprob(h):
@@ -419,4 +61,3 @@ for f in input_sents:
         tm_logprob = extract_tm_logprob(winner)
         sys.stderr.write('LM = %f, TM = %f, Total = %f\n' % 
             (winner.logprob - tm_logprob, tm_logprob, winner.logprob))
-
