@@ -1,0 +1,223 @@
+#!/usr/bin/env python
+import argparse
+import sys
+import models
+import heapq
+import itertools
+from collections import namedtuple
+
+parser = argparse.ArgumentParser(description='Simple phrase based decoder.')
+parser.add_argument('-i', '--input', dest='input', default='data/input', help='File containing sentences to translate (default=data/input)')
+parser.add_argument('-t', '--translation-model', dest='tm', default='data/tm', help='File containing translation model (default=data/tm)')
+parser.add_argument('-s', '--stack-size', dest='s', default=1, type=int, help='Maximum stack size (default=1)')
+parser.add_argument('-n', '--num_sentences', dest='num_sents', default=sys.maxint, type=int, help='Number of sentences to decode (default=no limit)')
+parser.add_argument('-l', '--language-model', dest='lm', default='data/lm', help='File containing ARPA-format language model (default=data/lm)')
+parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', default=False,  help='Verbose mode (default=off)')
+opts = parser.parse_args()
+
+tm = models.TM(opts.tm, sys.maxint)
+lm = models.LM(opts.lm)
+sys.stderr.write('Decoding %s...\n' % (opts.input,))
+input_sents = [tuple(line.strip().split()) for line in open(opts.input).readlines()[:opts.num_sents]]
+
+hypothesis = namedtuple('hypothesis', 'logprob, lm_state, predecessor, phrase, begin, end')
+phrase = namedtuple("phrase", "english, logprob")
+def make_permutations(partial_string_orig):
+    partial_strings=list(itertools.permutations(list(partial_string_orig)))
+    return partial_strings
+
+def merge_two_permutations(p1,p2):
+    two_merge=[]
+    for j,t1 in enumerate(p1):
+        for k,t2 in enumerate(p2):
+            l1=list(t1)
+            l2=list(t2)
+            l1.extend(l2)
+            two_merge.append(tuple(l1)) 
+    return two_merge
+
+def merge_permutations(p):
+    pkeys=sorted(p.keys()) 
+    last_key=pkeys[len(pkeys)-1]
+    first_key=pkeys[0]
+    two_merge=p[first_key]
+    for i in range(first_key+1,last_key+1):
+        two_merge=merge_two_permutations(two_merge,p[i])
+    #print len(two_merge)
+    return two_merge
+
+            
+
+def divide_and_make_permutations(partial_string_orig,k):
+    length_of_string=len(partial_string_orig)
+    if length_of_string <= k:
+        return make_permutations(partial_string_orig)
+    quotient=length_of_string/k
+    remained=length_of_string%k
+    quo_wise_permutations={}
+    #print quotient,remained
+    for i in range(quotient):
+        quo_wise_permutations[i]=make_permutations(partial_string_orig[i*k:(i+1)*k])
+
+    quo_wise_permutations[quotient]=make_permutations(partial_string_orig[quotient*k:])
+    #print "quo wise",quo_wise_permutations
+    all_permutations=merge_permutations(quo_wise_permutations)
+    return all_permutations
+
+
+'''
+f=('alok','is','a','good','boy','what','is','going','on','here','or')
+a=divide_and_make_permutations(f,3)
+for j in a:
+    print j
+exit()
+'''
+def all_future_cost_estimation(f):
+    l=len(f)
+    all_fc={}
+    for i in xrange(l):
+        for j in xrange(i+1,l):
+            fc=future_cost_estimation(f[i:j])
+            min_c=100000000
+            for p,c in fc.iteritems():
+                #all_fc[(i,j)]=fc
+                if c < min_c:
+                   min_c=c
+            all_fc[(i,j)]=min_c
+    return all_fc
+    
+            
+def future_cost_estimation(partial_string):
+    fc={}
+    if partial_string in tm:
+        for given_phrase in tm[partial_string]:
+            logprob=given_phrase.logprob
+            lm_state = lm.begin()
+            for word in given_phrase:
+                (lm_state, word_logprob) = lm.score(lm_state, word)
+                logprob += word_logprob
+        fc[given_phrase]=logprob
+    return fc
+
+
+
+
+
+sys.stderr.write("Number of sentences %d\n" % (len(input_sents),))
+counter=0
+for f in input_sents:
+    # The following code implements a DP monotone decoding
+    # algorithm (one that doesn't permute the target phrases).
+    # Hence all hypotheses in stacks[i] represent translations of 
+    # the first i words of the input sentence.
+    # HINT: Generalize this so that stacks[i] contains translations
+    # of any i words (remember to keep track of which words those
+    # are, and to estimate future costs)
+    counter+=1
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None,0,1)
+    translated_spans=[]
+    sys.stderr.write("current sentence %d\n" % (counter,))
+    all_fc=all_future_cost_estimation(f)
+    #print all_fc,len(f)
+    stacks = [{} for _ in f] + [{}]
+    stacks[0][lm.begin()] = initial_hypothesis
+    for i in xrange(len(f)):
+        for j in xrange(i+1,len(f)):
+            partial_string=f[i:j]
+        # extend the top s hypotheses in the current stack
+        #print i,len(stack)
+        for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob): # prune
+            partial_string=f[h.begin:h.end]
+            for j in xrange(i+1,len(f)):
+                #print "J=",j
+                partial_strings=[]
+                partial_strings.append(f[i:j])
+                for partial_string in partial_strings:
+                    if partial_string in tm:
+                        for given_phrase in tm[partial_string]:
+                            #all_phrases=divide_and_make_permutations(tuple(given_phrase.english.split()),3)
+                            logprob = h.logprob + given_phrase.logprob
+                            lm_state = h.lm_state
+                            for word in given_phrase.english.split():
+                                (lm_state, word_logprob) = lm.score(lm_state, word)
+                                logprob += word_logprob
+                            logprob += lm.end(lm_state) if j == len(f) else 0.0
+                            '''
+                            if j+1<len(f)-1:
+                               all_cost=all_fc[(j+1,len(f)-1)]+logprob
+                            else:
+                               all_cost=logprob
+                            '''
+                            new_hypothesis = hypothesis(logprob, lm_state, h, given_phrase)
+                            if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
+                                #print "new hypothesis updated",j
+                                stacks[j][lm_state] = new_hypothesis 
+                        
+
+    # find best translation by looking at the best scoring hypothesis
+    # on the last stack
+    #winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
+    winner = max(stacks[len(f)].itervalues(), key=lambda h: h.logprob)
+    def extract_english_recursive(h):
+        return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
+    print extract_english_recursive(winner)
+    if opts.verbose:
+        def extract_tm_logprob(h):
+            return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
+        tm_logprob = extract_tm_logprob(winner)
+        sys.stderr.write('LM = %f, TM = %f, Total = %f\n' % 
+            (winner.logprob - tm_logprob, tm_logprob, winner.logprob))
+'''
+for f in input_sents:
+    # The following code implements a DP monotone decoding
+    # algorithm (one that doesn't permute the target phrases).
+    # Hence all hypotheses in stacks[i] represent translations of 
+    # the first i words of the input sentence.
+    # HINT: Generalize this so that stacks[i] contains translations
+    # of any i words (remember to keep track of which words those
+    # are, and to estimate future costs)
+    counter+=1
+    initial_hypothesis = hypothesis(0.0, lm.begin(), None, None)
+    sys.stderr.write("current sentence %d\n" % (counter,))
+    all_fc=all_future_cost_estimation(f)
+    #print all_fc,len(f)
+    stacks = [{} for _ in f] + [{}]
+    stacks[0][lm.begin()] = initial_hypothesis
+    for i, stack in enumerate(stacks[:-1]):
+        # extend the top s hypotheses in the current stack
+        #print i,len(stack)
+        for h in heapq.nlargest(opts.s, stack.itervalues(), key=lambda h: h.logprob): # prune
+            for j in xrange(i+1,len(f)):
+                #print "J=",j
+                partial_strings=[]
+                partial_strings.append(f[i:j])
+                for partial_string in partial_strings:
+                    if partial_string in tm:
+                        for given_phrase in tm[partial_string]:
+                            #all_phrases=divide_and_make_permutations(tuple(given_phrase.english.split()),3)
+                            logprob = h.logprob + given_phrase.logprob
+                            lm_state = h.lm_state
+                            for word in given_phrase.english.split():
+                                (lm_state, word_logprob) = lm.score(lm_state, word)
+                                logprob += word_logprob
+                            logprob += lm.end(lm_state) if j == len(f) else 0.0
+                            new_hypothesis = hypothesis(logprob, lm_state, h, given_phrase)
+                            if lm_state not in stacks[j] or stacks[j][lm_state].logprob < logprob: # second case is recombination
+                                #print "new hypothesis updated",j
+                                stacks[j][lm_state] = new_hypothesis 
+                        
+
+    # find best translation by looking at the best scoring hypothesis
+    # on the last stack
+    #winner = max(stacks[-1].itervalues(), key=lambda h: h.logprob)
+    winner = max(stacks[len(f)].itervalues(), key=lambda h: h.logprob)
+    def extract_english_recursive(h):
+        return '' if h.predecessor is None else '%s%s ' % (extract_english_recursive(h.predecessor), h.phrase.english)
+    print extract_english_recursive(winner)
+    if opts.verbose:
+        def extract_tm_logprob(h):
+            return 0.0 if h.predecessor is None else h.phrase.logprob + extract_tm_logprob(h.predecessor)
+        tm_logprob = extract_tm_logprob(winner)
+        sys.stderr.write('LM = %f, TM = %f, Total = %f\n' % 
+            (winner.logprob - tm_logprob, tm_logprob, winner.logprob))
+'''
