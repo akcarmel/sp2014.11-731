@@ -1,0 +1,48 @@
+
+:::Requirements:::
+1.train_and_predict.py
+2. build_lexical_tm.py
+
+:::How to Run:::
+
+0.1 run meteor-score.py to get the meteor scores (have to do only once)
+0.2 build_lexical_tm.py to build a lexical model from alignments
+1. Then run $./run.sh
+    calculate_features
+    -- It calculates train features
+    --  calculates test features
+    sampling
+    -- take 1000 random samplings from n-bests (this number can be changed) and picks top 500 (can be supplied as param) from them.
+    -- creates the training file from here
+    -- read the test feature file
+    -- predicts features  (Need train_and_predict.py)
+2. change and edit calculate_features to get features
+
+---Experiments Outputs --
+
+My approach followed the PRO paper "Tuning as Ranking" in spirit.
+
+EXP1:0.337 Just punctuation ratios and differences, alongwith ratio of lens and differences. No Normalization. Taking 50 difference vectorstop samples from each sentence, in addition to given 3 features
+0.336 for tops=10,0.332 for tops=100. 0.335 for tops=80
+
+EXP1.1  Implemented logistic regression also, to compare scores with linear regression.
+
+EXP 2: Now added normalized number of untranslated russian words as a feature, score still around the same area
+
+EXP 2.1: COMPARING SCORES, WITH 'CLEANED' DATA as well. If normalized variance is low, I ignore the feature. It did not improve  results.
+This is not giving any gains. 
+
+EXP3: Added OOV and lexical model built from aligned data.
+
+Maybe so many features are not required?
+
+EXP4: Removed one feature at a time in hope of increasing performance.
+
+Final Output: Features in EXP 1, were best.
+
+--- Lessons ---
+
+ svm.SVR is slow and does not scale to large data (like 800k points), use SGDregressor instead
+
+
+
